@@ -11,6 +11,7 @@ import {
 } from 'firebase/database';
 
 export const categories = [
+  // Original categories
   "If they were a movie, they'd be:",
   "If they were a superhero, their power would be:",
   "Their spirit animal is:",
@@ -25,13 +26,46 @@ export const categories = [
   "Their catchphrase should be:",
   "If they had a warning label, it would say:",
   "They're secretly plotting to:",
-  "Their autobiography would be called:"
+  "Their autobiography would be called:",
+  
+  // New categories
+  "If they were a Disney character, they'd be:",
+  "Their dating profile headline would be:",
+  "If they were a drink, they'd be:",
+  "Their superhero weakness would be:",
+  "If they ran for president, their slogan would be:",
+  "Their biggest fear is probably:",
+  "If they were a TV show, they'd be:",
+  "Their dream job would be:",
+  "If they were a social media app, they'd be:",
+  "Their most likely to award would be:",
+  "If they were a holiday, they'd be:",
+  "Their karaoke song would be:",
+  "If they were a conspiracy theory, they'd be:",
+  "Their worst nightmare would be:",
+  "If they were a video game, they'd be:",
+  "Their hidden talent is:",
+  "If they were a historical figure, they'd be:",
+  "Their life motto is:",
+  "If they were a kitchen appliance, they'd be:",
+  "Their celebrity doppelganger is:",
+  "If they were a pizza topping, they'd be:",
+  "Their reality show would be called:",
+  "If they were a genre of music, they'd be:",
+  "Their supervillain name would be:",
+  "If they were a car, they'd be:"
 ];
 
 class GameService {
   // Generate random 6-character room code
   generateRoomCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+
+  // Get 4 random unique categories
+  getRandomCategories() {
+    const shuffled = [...categories].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, 4);
   }
 
   // Create a new room
@@ -54,7 +88,7 @@ class GameService {
       },
       settings: {
         maxPlayers: 10,
-        timePerRound: 30
+        totalRounds: 4
       }
     };
 
@@ -109,64 +143,88 @@ class GameService {
     return { roomCode, playerId, playerName };
   }
 
-  // Start the game
+  // Start the writing phase with all 4 categories
   async startGame(roomCode) {
-    const category = categories[Math.floor(Math.random() * categories.length)];
+    const selectedCategories = this.getRandomCategories();
     const roomRef = ref(database, `rooms/${roomCode}`);
     const snapshot = await get(roomRef);
     const players = Object.keys(snapshot.val().players);
     
     const gameData = {
       phase: 'writing',
-      currentCategory: category,
-      currentRound: 0,
+      categories: selectedCategories,
+      currentRound: 0, // Will be set to 1 when guessing starts
+      totalRounds: 4,
       currentSubjectIndex: 0,
-      answers: {},
+      allAnswers: {}, // Store all answers from all rounds
+      playersCompleted: {}, // Track which players have finished writing
       startedAt: serverTimestamp()
     };
     
-    // Initialize answer structure
+    // Initialize answer structure for all rounds
+    for (let round = 1; round <= 4; round++) {
+      gameData.allAnswers[`round${round}`] = {};
+      players.forEach(playerId => {
+        gameData.allAnswers[`round${round}`][playerId] = {};
+      });
+    }
+    
+    // Initialize player completion tracking
     players.forEach(playerId => {
-      gameData.answers[playerId] = {};
+      gameData.playersCompleted[playerId] = false;
     });
     
     await set(ref(database, `rooms/${roomCode}/game`), gameData);
     await set(ref(database, `rooms/${roomCode}/phase`), 'writing');
   }
 
-  // Submit an answer
-  async submitAnswer(roomCode, writerId, subjectId, answer) {
-    const answerRef = ref(database, `rooms/${roomCode}/game/answers/${subjectId}/${writerId}`);
+  // Submit an answer for a specific round
+  async submitAnswerForRound(roomCode, writerId, subjectId, answer, roundNumber) {
+    const answerRef = ref(database, `rooms/${roomCode}/game/allAnswers/round${roundNumber}/${subjectId}/${writerId}`);
     await set(answerRef, {
       text: answer,
       submittedAt: serverTimestamp()
     });
-    
-    // Check if all answers are submitted
-    await this.checkAllAnswersSubmitted(roomCode);
   }
 
-  // Check if all answers are submitted
-  async checkAllAnswersSubmitted(roomCode) {
+  // Mark a player as having completed all writing
+  async markPlayerWritingComplete(roomCode, playerId) {
+    const completeRef = ref(database, `rooms/${roomCode}/game/playersCompleted/${playerId}`);
+    await set(completeRef, true);
+    
+    // Check if all players are done
+    await this.checkAllPlayersComplete(roomCode);
+  }
+
+  // Check if all players have finished writing
+  async checkAllPlayersComplete(roomCode) {
     const roomRef = ref(database, `rooms/${roomCode}`);
     const snapshot = await get(roomRef);
     const roomData = snapshot.val();
     
-    const players = Object.keys(roomData.players);
-    const answers = roomData.game?.answers || {};
+    const playersCompleted = roomData.game?.playersCompleted || {};
+    const allComplete = Object.values(playersCompleted).every(completed => completed === true);
     
-    let totalExpected = players.length * players.length;
-    let totalSubmitted = 0;
-    
-    Object.values(answers).forEach(subjectAnswers => {
-      totalSubmitted += Object.keys(subjectAnswers).length;
-    });
-    
-    if (totalSubmitted >= totalExpected) {
-      // Move to guessing phase
-      await set(ref(database, `rooms/${roomCode}/phase`), 'guessing');
-      await set(ref(database, `rooms/${roomCode}/game/currentSubjectIndex`), 0);
+    if (allComplete) {
+      // All players done - notify host to start guessing phase
+      await set(ref(database, `rooms/${roomCode}/game/allWritingComplete`), true);
     }
+  }
+
+  // Start the guessing phase (called by host after all writing is complete)
+  async startGuessingPhase(roomCode) {
+    const roomRef = ref(database, `rooms/${roomCode}`);
+    const snapshot = await get(roomRef);
+    const roomData = snapshot.val();
+    
+    // Set up for first round of guessing
+    const firstRoundAnswers = roomData.game.allAnswers.round1;
+    
+    await set(ref(database, `rooms/${roomCode}/game/currentRound`), 1);
+    await set(ref(database, `rooms/${roomCode}/game/currentCategory`), roomData.game.categories[0]);
+    await set(ref(database, `rooms/${roomCode}/game/answers`), firstRoundAnswers);
+    await set(ref(database, `rooms/${roomCode}/game/currentSubjectIndex`), 0);
+    await set(ref(database, `rooms/${roomCode}/phase`), 'guessing');
   }
 
   // Submit a guess
@@ -177,14 +235,14 @@ class GameService {
       submittedAt: serverTimestamp()
     });
     
-    // Update score if correct
+    // Update score if correct - 20 points for correct guess
     if (guessedWriterId === subjectId) {
       const playerRef = ref(database, `rooms/${roomCode}/players/${playerId}/score`);
       const snapshot = await get(playerRef);
       const currentScore = snapshot.val() || 0;
-      await set(playerRef, currentScore + 10);
+      await set(playerRef, currentScore + 20);
     } else {
-      // Give points to the subject for fooling someone
+      // Give 5 points to the subject for fooling someone
       const subjectRef = ref(database, `rooms/${roomCode}/players/${subjectId}/score`);
       const snapshot = await get(subjectRef);
       const currentScore = snapshot.val() || 0;
@@ -192,7 +250,7 @@ class GameService {
     }
   }
 
-  // Move to next round
+  // Move to next round or subject
   async nextRound(roomCode) {
     const roomRef = ref(database, `rooms/${roomCode}`);
     const snapshot = await get(roomRef);
@@ -202,12 +260,51 @@ class GameService {
     const currentIndex = roomData.game.currentSubjectIndex;
     
     if (currentIndex + 1 < players.length) {
-      // Next subject
+      // Next subject in current round
       await set(ref(database, `rooms/${roomCode}/game/currentSubjectIndex`), currentIndex + 1);
     } else {
-      // Game over - show final results
-      await set(ref(database, `rooms/${roomCode}/phase`), 'results');
+      // Round complete - check if more rounds remain
+      const currentRound = roomData.game.currentRound;
+      
+      if (currentRound < roomData.game.totalRounds) {
+        // Show scoreboard between rounds
+        await set(ref(database, `rooms/${roomCode}/phase`), 'scoreboard');
+        
+        // After scoreboard, automatically move to next round
+        setTimeout(async () => {
+          const nextRound = currentRound + 1;
+          const nextCategory = roomData.game.categories[nextRound - 1];
+          const nextRoundAnswers = roomData.game.allAnswers[`round${nextRound}`];
+          
+          await set(ref(database, `rooms/${roomCode}/game/currentRound`), nextRound);
+          await set(ref(database, `rooms/${roomCode}/game/currentCategory`), nextCategory);
+          await set(ref(database, `rooms/${roomCode}/game/currentSubjectIndex`), 0);
+          await set(ref(database, `rooms/${roomCode}/game/answers`), nextRoundAnswers);
+          await set(ref(database, `rooms/${roomCode}/game/guesses`), {});
+          await set(ref(database, `rooms/${roomCode}/phase`), 'guessing');
+        }, 10000); // 10 second scoreboard display
+      } else {
+        // Game over - show final results
+        await set(ref(database, `rooms/${roomCode}/phase`), 'results');
+      }
     }
+  }
+
+  // Reset game for replay
+  async resetGame(roomCode) {
+    const roomRef = ref(database, `rooms/${roomCode}`);
+    const snapshot = await get(roomRef);
+    const roomData = snapshot.val();
+    
+    // Reset all player scores
+    const players = roomData.players;
+    for (let playerId in players) {
+      await set(ref(database, `rooms/${roomCode}/players/${playerId}/score`), 0);
+    }
+    
+    // Clear game data and return to waiting
+    await remove(ref(database, `rooms/${roomCode}/game`));
+    await set(ref(database, `rooms/${roomCode}/phase`), 'waiting');
   }
 
   // Listen to room updates

@@ -4,6 +4,11 @@ function Timer({ duration = 30, onComplete }) {
   const [timeLeft, setTimeLeft] = useState(duration);
   const percentage = (timeLeft / duration) * 100;
 
+  // Reset timer when duration changes
+  useEffect(() => {
+    setTimeLeft(duration);
+  }, [duration]);
+
   useEffect(() => {
     if (timeLeft <= 0) {
       if (onComplete) onComplete();
